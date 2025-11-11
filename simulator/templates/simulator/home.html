@@ -1,0 +1,33 @@
+{% extends 'base.html' %}
+{% block title %}Planificador CPU{% endblock %}
+{% block content %}
+<h3>Planificador de CPU</h3>
+<form method="post" action="{% url 'run_simulation' %}">
+  {% csrf_token %}
+  <div>{{ form.procesos_json.label_tag }} {{ form.procesos_json }}</div>
+  <div>{{ form.algoritmo.label_tag }} {{ form.algoritmo }}</div>
+  <div>{{ form.quantum.label_tag }} {{ form.quantum }}</div>
+  <button type="submit">Ejecutar</button>
+</form>
+{% if error %}<p style="color:#a00"><strong>Error:</strong> {{ error }}</p>{% endif %}
+{% if result %}
+  <h4>Resultados</h4>
+  <ul>
+    <li>Avg Wait: {{ result.avg_wait|floatformat:2 }}</li>
+    <li>Avg Turnaround: {{ result.avg_turnaround|floatformat:2 }}</li>
+    <li>Makespan: {{ result.makespan }}</li>
+  </ul>
+  <h5>Timeline</h5>
+  <pre class="mono">{{ result.timeline|safe }}</pre>
+  <h5>Completados</h5>
+  <pre class="mono">{{ result.completed|safe }}</pre>
+  <details>
+    <summary>Macroalgoritmos</summary>
+<pre class="mono">
+FCFS: ordenar por llegada, ejecutar sin interrupciones, métricas al final.
+RR: cola circular, quantum configurable, reinsertar si resta CPU.
+SJF: elegir ráfaga más corta entre disponibles (no expropiativo).
+</pre>
+  </details>
+{% endif %}
+{% endblock %}

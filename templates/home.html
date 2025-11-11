@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% block title %}Inicio — OS Simulator{% endblock %}
+{% block content %}
+<h3>Descripción</h3>
+<ol>
+  <li><strong>Planificación de CPU</strong>: FCFS, Round Robin y SJF con métricas.</li>
+  <li><strong>Sistema de Archivos Virtual</strong>: usuarios, permisos (rwx), operaciones y comandos tipo Linux.</li>
+</ol>
+<section class="grid grid-2">
+  <div>
+    <h4>Semana 1: Procesos básicos</h4>
+<pre class="mono">[
+  {"pid": 1, "llegada": 0, "rafaga": 5, "usuario": "usuario1"},
+  {"pid": 2, "llegada": 1, "rafaga": 3, "usuario": "usuario2"}
+]</pre>
+  </div>
+  <div>
+    <h4>Semana 2: Usuarios/permisos</h4>
+<pre class="mono">[
+  {"pid": 1, "llegada": 0, "rafaga": 6, "usuario": "root"},
+  {"pid": 2, "llegada": 0, "rafaga": 2, "usuario": "usuario1"}
+]</pre>
+  </div>
+</section>
+{% endblock %}
