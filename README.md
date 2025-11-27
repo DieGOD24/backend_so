@@ -15,14 +15,9 @@
 ```bash
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install Django
+pip install -r requirements.txt
 python manage.py migrate
 python manage.py runserver
 ```
 - Planificador: http://127.0.0.1:8000/sim/
 - VFS: http://127.0.0.1:8000/vfs/
-
-## Macroalgoritmos
-- FCFS: ordenar por llegada, ejecutar completo, sin interrupciones.
-- RR: cola circular, quantum, reinsertar si resta CPU.
-- SJF: elegir ráfaga más corta (no expropiativo).
