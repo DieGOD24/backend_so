@@ -1,25 +1,434 @@
 {% extends 'base.html' %}
 {% block title %}Inicio — OS Simulator{% endblock %}
 {% block content %}
-<h3>Descripción</h3>
-<ol>
-  <li><strong>Planificación de CPU</strong>: FCFS, Round Robin y SJF con métricas.</li>
-  <li><strong>Sistema de Archivos Virtual</strong>: usuarios, permisos (rwx), operaciones y comandos tipo Linux.</li>
-</ol>
-<section class="grid grid-2">
-  <div>
-    <h4>Semana 1: Procesos básicos</h4>
-<pre class="mono">[
-  {"pid": 1, "llegada": 0, "rafaga": 5, "usuario": "usuario1"},
-  {"pid": 2, "llegada": 1, "rafaga": 3, "usuario": "usuario2"}
-]</pre>
-  </div>
-  <div>
-    <h4>Semana 2: Usuarios/permisos</h4>
-<pre class="mono">[
-  {"pid": 1, "llegada": 0, "rafaga": 6, "usuario": "root"},
-  {"pid": 2, "llegada": 0, "rafaga": 2, "usuario": "usuario1"}
-]</pre>
-  </div>
+<h2>Informe técnico - simulador de planificación de CPU, sistema de archivos virtual y GUI web en Django</h2>
+
+<section>
+  <h3>Integrantes</h3>
+  <ul>
+    <li>Maicol Stiven - stiven.ruiz@utp.edu.co</li>
+    <li>Kevin Esguerra - kevin.esguerra@utp.edu.co</li>
+    <li>Isabella Cardona - i.cardona1@utp.edu.co</li>
+    <li>Diego Giraldo - diego.giraldo2@utp.edu.co</li>
+  </ul>
 </section>
+
+<p>
+  Este informe documenta el repositorio <code>proyecto-final-so</code>, que integra un simulador discreto de planificación de procesos
+  (FCFS, SJF y Round Robin) y un sistema de archivos virtual operado vía CLI, así como la
+  <strong>GUI web desarrollada en Django</strong> que expone la lógica del simulador y del sistema de archivos a través de una interfaz web.
+  Se incluyen detalles de arquitectura, decisiones de diseño, flujo de ejecución y evidencias de prueba.
+</p>
+<p>
+  La GUI de escritorio referenciada en algunos demos (PyWebview) <strong>no se encuentra</strong> en este árbol; la
+  <strong>GUI final en producción</strong> corresponde a una aplicación web en Django descrita en este informe.
+</p>
+
+<hr>
+
+<h3>Objetivo y alcance</h3>
+<ul>
+  <li>Desarrollar un entorno didáctico para estudiar algoritmos clásicos de planificación de CPU y un sistema de archivos simplificado con permisos básicos.</li>
+  <li>
+    Proveer:
+    <ul>
+      <li>Un <strong>adaptador CLI</strong> unificado que permita ejecutar simulaciones y explorar el sistema de archivos virtual.</li>
+      <li>Una <strong>GUI web basada en Django</strong> que permita a los estudiantes interactuar con los algoritmos y el sistema de archivos desde un navegador.</li>
+    </ul>
+  </li>
+  <li>Incluir escenarios de ejemplo, scripts de demostración y pruebas automatizadas para validar los módulos nucleares.</li>
+</ul>
+
+<hr>
+
+<h3>Arquitectura general</h3>
+<ul>
+  <li>
+    <strong>Dominio core (<code>core/</code>)</strong>:
+    dos subdominios aislados (<code>scheduler</code> y <code>fs</code>) que contienen modelos y lógica de negocio, independientes de la interfaz (CLI o web).
+  </li>
+  <li>
+    <strong>Servicios de aplicación (<code>core/services</code>)</strong>:
+    fachadas <code>SimService</code> y <code>FsService</code> que traducen peticiones externas (CLI o web) a acciones de dominio.
+  </li>
+  <li>
+    <strong>Adaptadores (<code>adapters/</code>)</strong>:
+    <ul>
+      <li>CLI principal (<code>adapters/cli/main.py</code>) y documentación de uso (<code>adapters/cli/CLI_README.md</code>, <code>FLUJO_EJECUCION_CLI.md</code>).</li>
+      <li>La GUI web usa la misma lógica de dominio, pero a través de un <strong>backend Django</strong> externo (ver sección “GUI web en Django”).</li>
+    </ul>
+  </li>
+  <li>
+    <strong>Datos (<code>data/examples</code>)</strong>:
+    escenarios CSV/JSON listos para alimentar el simulador.
+  </li>
+  <li>
+    <strong>Demos y utilidades</strong>:
+    <code>demo_cli.py</code>, <code>enhanced_demo.py</code>, <code>test_filesystem.py</code> para recorridos end-to-end y pruebas rápidas.
+  </li>
+</ul>
+
+<hr>
+
+<h3>Detalle técnico: simulador de planificación (<code>core/scheduler</code>)</h3>
+
+<h4>Algoritmos (<code>core/scheduler/algorithms</code>)</h4>
+<ul>
+  <li><code>FCFSAlgorithm</code>: no expropiativo, respeta orden de llegada.</li>
+  <li><code>SJFAlgorithm</code>: no expropiativo, elige menor ráfaga restante con estabilidad en empates.</li>
+  <li>
+    <code>RoundRobinAlgorithm</code>: expropiativo, quantum configurable; el <code>time_slice</code> del simulador puede sobrescribir el valor.
+  </li>
+  <li>
+    <code>SchedulingDecision</code> define la interfaz común
+    (<code>next_process</code>, <code>preempt_current</code>, <code>timeslice</code>).
+  </li>
+</ul>
+
+<h4>Ciclo de simulación (<code>core/scheduler/simulator.py</code>)</h4>
+<ul>
+  <li>
+    <code>SimulationConfig</code> agrupa algoritmo, <code>time_slice</code>, <code>max_time</code> y parámetros de I/O
+    (media/desviación de intervalo y duración, máximo de eventos, habilitado).
+  </li>
+  <li>
+    En cada tick:
+    <ul>
+      <li>Se encolan llegadas.</li>
+      <li>Se avanza I/O de bloqueados.</li>
+      <li>Se reingresan procesos desbloqueados.</li>
+      <li>El algoritmo decide el siguiente PCB.</li>
+      <li>Se consume CPU, se registran <code>context_switches</code> y <code>busy_time</code>.</li>
+      <li>Se calculan tiempos de finalización, espera y retorno.</li>
+    </ul>
+  </li>
+  <li>Si se supera <code>max_time</code>, la simulación corta sin completar procesos restantes.</li>
+</ul>
+
+<h4>Modelo de procesos (<code>core/scheduler/pcb.py</code>)</h4>
+<ul>
+  <li>
+    El PCB contiene tiempos de llegada/ráfaga, prioridad opcional, y métricas derivadas
+    (<code>response_time</code>, <code>waiting_time</code>, <code>turnaround_time</code>).
+  </li>
+  <li>
+    Genera agendas de I/O pseudoaleatorias acotadas a la ráfaga total;
+    <code>io_request_due</code> y <code>tick_io</code> mueven el proceso entre <code>READY</code> y <code>BLOCKED</code>.
+  </li>
+</ul>
+
+<h4>Colas y estados (<code>core/scheduler/queues.py</code>, <code>core/scheduler/states.py</code>)</h4>
+<ul>
+  <li>Colas <code>ReadyQueue</code> y <code>BlockedQueue</code> sobre <code>deque</code>.</li>
+  <li>Estados finitos <code>NEW</code>, <code>READY</code>, <code>RUNNING</code>, <code>BLOCKED</code>, <code>TERMINATED</code>.</li>
+</ul>
+
+<h4>Métricas (<code>core/scheduler/metrics.py</code>)</h4>
+<ul>
+  <li>
+    <code>SimulationMetrics.from_pcbs</code> deriva métricas por proceso y agrega throughput, utilización de CPU y cambios de contexto.
+  </li>
+</ul>
+
+<h4>Pruebas unitarias (<code>core/scheduler/tests/test_scheduler.py</code>)</h4>
+<ul>
+  <li>Orden FCFS.</li>
+  <li>Desempate estable SJF.</li>
+  <li>Respeto de quantum y <code>time_slice</code> en RR.</li>
+  <li>Flujo determinista de I/O bloqueado/desbloqueado.</li>
+  <li>Corte por <code>max_time</code>.</li>
+  <li>Procesos de ráfaga cero.</li>
+</ul>
+
+<hr>
+
+<h3>Detalle técnico: sistema de archivos virtual (<code>core/fs</code>)</h3>
+
+<h4>Modelos (<code>core/fs/models.py</code>)</h4>
+<ul>
+  <li><code>Directory</code> y <code>File</code> heredan de <code>FileSystemEntity</code>.</li>
+  <li>Mantienen propietario, permisos y construcción de rutas absolutas.</li>
+</ul>
+
+<h4>Permisos (<code>core/fs/permissions.py</code>)</h4>
+<ul>
+  <li><code>PermissionSet</code> con banderas rwx solo para el propietario.</li>
+  <li>Todas las operaciones validan lectura/escritura/ejecución respecto al usuario activo.</li>
+</ul>
+
+<h4>Operaciones (<code>core/fs/ops.py</code>)</h4>
+<ul>
+  <li>Comandos: <code>ls</code>, <code>cd</code>, <code>pwd</code>, <code>mkdir</code>, <code>touch</code>, <code>cat</code>, <code>write</code>, <code>rm</code>, <code>tree</code>, <code>resolve</code>.</li>
+  <li>Soporte de rutas absolutas y relativas con <code>.</code> y <code>..</code>.</li>
+  <li>Validación estricta de tipos y permisos.</li>
+  <li>
+    Particularidades:
+    <ul>
+      <li><code>mkdir</code>, <code>touch</code> y <code>write</code> requieren que el directorio padre exista.</li>
+      <li><code>rm</code> acepta <code>recursive</code> solo vía argumento nombrado (la shell actual no parsea <code>-r</code>).</li>
+      <li>No hay persistencia entre sesiones ni multiusuario real: todo es en memoria.</li>
+    </ul>
+  </li>
+</ul>
+
+<h4>Renderizado de árbol (<code>core/fs/tree_renderer.py</code>)</h4>
+<ul>
+  <li><code>render_tree</code> recorre DFS priorizando directorios.</li>
+  <li>Emite conectores estilo comando <code>tree</code> para visualización jerárquica.</li>
+</ul>
+
+<hr>
+
+<h3>Servicios y adaptadores</h3>
+
+<h4><code>SimService</code> (<code>core/services/sim_service.py</code>)</h4>
+<p>
+  Traduce un <code>SimulationRequest</code> en PCBs, instancia el algoritmo solicitado (<code>fcfs</code>, <code>rr</code>, <code>sjf</code>),
+  arma el <code>SchedulerSimulator</code> y retorna <code>SimulationMetrics</code>.
+</p>
+
+<h4><code>FsService</code> (<code>core/services/fs_service.py</code>)</h4>
+<p>
+  Mapea comandos de texto a métodos de <code>FileSystemOps</code> y normaliza las salidas para la CLI o para cualquier
+  capa superior (por ejemplo, vistas Django).
+</p>
+
+<h4>CLI (<code>adapters/cli/main.py</code>)</h4>
+<ul>
+  <li>
+    Subcomando <code>sim</code>:
+    <ul>
+      <li><code>--algo</code> (<code>fcfs|rr|sjf</code>)</li>
+      <li><code>--input</code> (CSV/JSON <code>pid,arrival,burst[,priority]</code>)</li>
+      <li><code>--quantum</code> obligatorio para <code>rr</code>.</li>
+    </ul>
+  </li>
+  <li>
+    Subcomando <code>fs</code>:
+    <ul>
+      <li>Abre shell interactiva con prompt <code>fs:&lt;ruta&gt;</code>.</li>
+      <li>Comandos: <code>ls</code>, <code>cd</code>, <code>pwd</code>, <code>mkdir</code>, <code>touch</code>, <code>cat</code>, <code>write</code>, <code>rm</code>, <code>tree</code>, <code>help</code>, <code>exit</code>.</li>
+      <li>No existe parser de flags; los argumentos se pasan literales a <code>FileSystemOps</code>.</li>
+    </ul>
+  </li>
+  <li>
+    <code>format_metrics</code> imprime una tabla por proceso y métricas agregadas
+    (throughput, utilización de CPU, promedios de tiempos y cambios de contexto).
+  </li>
+  <li>
+    Documentación complementaria en <code>adapters/cli/CLI_README.md</code> y <code>FLUJO_EJECUCION_CLI.md</code>
+    (instrucciones paso a paso y sesiones de ejemplo).
+  </li>
+</ul>
+
+<hr>
+
+<h3>GUI web en Django</h3>
+
+<p>
+  Además de la CLI, el proyecto cuenta con una <strong>interfaz gráfica web (GUI)</strong>
+  que permite ejecutar los algoritmos de planificación y visualizar el sistema de archivos virtual desde el navegador.
+</p>
+
+<ul>
+  <li>
+    <strong>URL de acceso a la GUI</strong><br>
+    Sitio desplegado: <a href="https://so.cerebria.co" target="_blank" rel="noopener noreferrer">https://so.cerebria.co</a>
+  </li>
+  <li>
+    <strong>Repositorio de la GUI web</strong><br>
+    Código fuente:
+    <a href="https://github.com/DieGOD24/backend_so/tree/main" target="_blank" rel="noopener noreferrer">
+      https://github.com/DieGOD24/backend_so/tree/main
+    </a>
+  </li>
+</ul>
+
+<h4>Tecnologías utilizadas</h4>
+<ul>
+  <li>Lenguaje: <strong>Python 3.8+</strong></li>
+  <li>
+    <strong>Backend</strong>: Django <strong>5+</strong>
+    <ul>
+      <li>Vistas y endpoints que consumen la lógica del simulador y del sistema de archivos.</li>
+      <li>Adaptadores que invocan los servicios de dominio (<code>SimService</code> y <code>FsService</code>) para mantener una única fuente de verdad.</li>
+    </ul>
+  </li>
+  <li>
+    <strong>Frontend</strong>:
+    <ul>
+      <li><strong>HTML y templates de Django</strong>.</li>
+      <li>
+        Formularios y vistas para:
+        <ul>
+          <li>Configurar parámetros de simulación (algoritmo, quantum, escenarios de entrada).</li>
+          <li>Visualizar resultados: métricas agregadas, cronogramas de ejecución, líneas de tiempo y tablas por proceso.</li>
+          <li>Interactuar de forma básica con el sistema de archivos virtual (listados, creación de archivos/directorios, etc.).</li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+  <li>
+    La GUI adapta la lógica desarrollada por los compañeros en <code>proyecto-final-so</code>
+    para que se ejecute de manera integrada en el ecosistema Django, sin duplicar la lógica del dominio.
+  </li>
+</ul>
+
+<h4>Integración con el dominio</h4>
+<ul>
+  <li>
+    El backend Django actúa como otra capa de presentación sobre el mismo dominio:
+    <ul>
+      <li>Las vistas traducen las solicitudes HTTP en objetos de solicitud interna (por ejemplo, <code>SimulationRequest</code>).</li>
+      <li>Se invocan los servicios <code>SimService</code>/<code>FsService</code>.</li>
+      <li>Se formatean las respuestas para mostrarlas en plantillas HTML.</li>
+    </ul>
+  </li>
+  <li>
+    De esta forma, se garantiza:
+    <ul>
+      <li><strong>Consistencia</strong> entre la ejecución por CLI y por web.</li>
+      <li><strong>Reutilización</strong> del código de negocio.</li>
+      <li><strong>Separación de responsabilidades</strong> (dominio, aplicación, presentación).</li>
+    </ul>
+  </li>
+</ul>
+
+<hr>
+
+<h3>Datos, demos y pruebas de soporte</h3>
+
+<h4>Escenarios de entrada (<code>data/examples</code>)</h4>
+<ul>
+  <li><code>scenario1.csv</code>, <code>scenario3.csv</code>: tablas <code>pid/llegada/ráfaga/prioridad</code>.</li>
+  <li><code>scenario2.json</code>: lista de jobs.</li>
+  <li>Permiten validar el comportamiento de los algoritmos bajo diferentes configuraciones.</li>
+</ul>
+
+<h4>Demos</h4>
+<ul>
+  <li><code>demo_cli.py</code>: ejecuta simulaciones de muestra y muestra instrucciones para el shell del sistema de archivos.</li>
+  <li>
+    <code>enhanced_demo.py</code>:
+    imprime comandos listos para probar algoritmos y CLI; menciona una GUI PyWebview
+    (que no forma parte de este repositorio, dado que la GUI final se implementó como app web en Django).
+  </li>
+</ul>
+
+<hr>
+
+<h3>Instalación y ejecución recomendada (CLI)</h3>
+
+<pre><code>python -m pip install -r requirements.txt
+
+# Simulador
+python -m adapters.cli.main sim --algo fcfs --input data/examples/scenario1.csv
+python -m adapters.cli.main sim --algo rr --quantum 2 --input data/examples/scenario2.json
+
+# Shell del sistema de archivos
+python -m adapters.cli.main fs --user alice
+</code></pre>
+
+<p>Para validar el simulador, ejecutar:</p>
+
+<pre><code>python -m pytest core/scheduler/tests/test_scheduler.py
+</code></pre>
+
+<p>
+  Para la GUI en Django, seguir las instrucciones del repositorio
+  <a href="https://github.com/DieGOD24/backend_so/tree/main" target="_blank" rel="noopener noreferrer">
+    https://github.com/DieGOD24/backend_so/tree/main
+  </a>
+  (instalación de dependencias, migraciones, ejecución de <code>manage.py runserver</code>, etc.).
+</p>
+
+<hr>
+
+<h3>Limitaciones y consideraciones</h3>
+<ul>
+  <li>
+    Los algoritmos se ejecutan en un modelo discreto simplificado:
+    <ul>
+      <li>No hay planificación multinúcleo.</li>
+      <li>No existen prioridades dinámicas ni envejecimiento.</li>
+    </ul>
+  </li>
+  <li>
+    La I/O se modela con agendas discretas y pseudoaleatorias:
+    <ul>
+      <li>No hay dispositivos reales ni latencias de hardware.</li>
+    </ul>
+  </li>
+  <li>
+    El sistema de archivos es:
+    <ul>
+      <li>Volátil (en memoria).</li>
+      <li>Monousuario lógico.</li>
+      <li>Sin persistencia ni cuotas.</li>
+    </ul>
+  </li>
+  <li>
+    En la shell actual:
+    <ul>
+      <li><code>rm</code> no acepta banderas; el borrado recursivo solo se expone por código (<code>recursive=True</code>).</li>
+    </ul>
+  </li>
+  <li>
+    La GUI web se orienta a fines didácticos:
+    <ul>
+      <li>No está pensada como panel de administración de producción.</li>
+      <li>Su objetivo principal es apoyar la comprensión de los conceptos de planificación de CPU y manejo de sistemas de archivos.</li>
+    </ul>
+  </li>
+</ul>
+
+<hr>
+
+<h3>Autoría y roles</h3>
+<ul>
+  <li>Desarrollo del simulador de planificación de CPU: <strong>Kevin Esguerra Cardona</strong></li>
+  <li>Desarrollo del sistema de archivos: <strong>Maicol</strong></li>
+  <li>Desarrollo de la CLI: <strong>Isabella</strong></li>
+  <li>Desarrollo de la GUI web (Django, HTML templates) y despliegue en <code>so.cerebria.co</code>: <strong>Diego</strong></li>
+</ul>
+
+<hr>
+
+<h3>Referencia y contexto académico</h3>
+<ul>
+  <li>
+    Repositorio simulador + FS (núcleo y CLI):
+    <a href="https://github.com/porgetit/proyecto-final-so/" target="_blank" rel="noopener noreferrer">
+      https://github.com/porgetit/proyecto-final-so/
+    </a>
+  </li>
+  <li>
+    Repositorio GUI web en Django:
+    <a href="https://github.com/DieGOD24/backend_so/tree/main" target="_blank" rel="noopener noreferrer">
+      https://github.com/DieGOD24/backend_so/tree/main
+    </a>
+  </li>
+  <li>
+    Sitio web de la GUI:
+    <a href="https://so.cerebria.co" target="_blank" rel="noopener noreferrer">
+      https://so.cerebria.co
+    </a>
+  </li>
+  <li>
+    Proyecto desarrollado como trabajo final para la materia de
+    <strong>Sistemas Operativos</strong> del programa de
+    <strong>Ingeniería en Sistemas y Computación</strong> de la
+    <strong>Universidad Tecnológica de Pereira</strong>,
+    bajo la dirección del ingeniero <strong>Juan García</strong>.
+  </li>
+</ul>
+
+<hr>
+
+<h3>Disclaimer sobre uso de IA</h3>
+<p>
+  Este informe y parte del soporte documental fueron preparados con asistencia de agentes de IA.
+  Se recomienda verificar y validar los detalles técnicos antes de utilizarlos en entornos de producción
+  o como insumo directo para evaluación académica formal.
+</p>
 {% endblock %}

@@ -1,18 +1,43 @@
 {% extends 'base.html' %}
+
 {% block title %}Sistema de Archivos Virtual{% endblock %}
+
 {% block content %}
 <h3>Sistema de Archivos Virtual</h3>
 <p>Usuario: <strong>{{ user }}</strong> · CWD: <code>{{ cwd }}</code></p>
+
 <form method="post" action="{% url 'vfs_cmd' %}">
   {% csrf_token %}
   <label>Comando:</label>
-  <input type="text" name="command" style="width:60%" placeholder="ls | cd /home | touch notas.txt | echo notas.txt hola | chmod notas.txt rwxr-----" />
+  <input
+    type="text"
+    name="command"
+    style="width:70%"
+    placeholder="ls | cd /home | touch notas.txt | echo notas.txt hola mundo... | tree | rm text.txt ..."
+  />
   <button type="submit">Ejecutar</button>
 </form>
+
 <h4>Salida</h4>
 <pre class="mono">{{ output }}</pre>
-<details><summary>Ayuda</summary>
-<pre class="mono">Comandos: ls [ruta], cd RUTA, mkdir NOMBRE, touch NOMBRE, cat NOMBRE, echo NOMBRE TEXTO, chmod NOMBRE RWXRWXRWX, su USUARIO, pwd
-Usuarios: root, usuario1, usuario2</pre>
+
+<details>
+  <summary>Ayuda</summary>
+  <pre class="mono">
+Comandos:
+  ls [ruta]
+  cd RUTA
+  mkdir RUTA
+  touch RUTA
+  cat RUTA
+  echo RUTA TEXTO         (usa write interno, sobrescribe)
+  rm [-r] RUTA            (para borrar directorios no vacíos usa -r)
+  tree [RUTA]             (árbol de directorios)
+  chmod RUTA PERM         (PERM: rw, r-x, rwx... solo propietario)
+  su USUARIO              (root, usuario1, usuario2)
+  pwd
+
+Usuarios disponibles: root, usuario1, usuario2
+  </pre>
 </details>
 {% endblock %}

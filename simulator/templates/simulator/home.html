@@ -1,33 +1,441 @@
 {% extends 'base.html' %}
 {% block title %}Planificador CPU{% endblock %}
+
 {% block content %}
-<h3>Planificador de CPU</h3>
-<form method="post" action="{% url 'run_simulation' %}">
-  {% csrf_token %}
-  <div>{{ form.procesos_json.label_tag }} {{ form.procesos_json }}</div>
-  <div>{{ form.algoritmo.label_tag }} {{ form.algoritmo }}</div>
-  <div>{{ form.quantum.label_tag }} {{ form.quantum }}</div>
-  <button type="submit">Ejecutar</button>
-</form>
-{% if error %}<p style="color:#a00"><strong>Error:</strong> {{ error }}</p>{% endif %}
-{% if result %}
-  <h4>Resultados</h4>
-  <ul>
-    <li>Avg Wait: {{ result.avg_wait|floatformat:2 }}</li>
-    <li>Avg Turnaround: {{ result.avg_turnaround|floatformat:2 }}</li>
-    <li>Makespan: {{ result.makespan }}</li>
-  </ul>
-  <h5>Timeline</h5>
-  <pre class="mono">{{ result.timeline|safe }}</pre>
-  <h5>Completados</h5>
-  <pre class="mono">{{ result.completed|safe }}</pre>
-  <details>
-    <summary>Macroalgoritmos</summary>
-<pre class="mono">
-FCFS: ordenar por llegada, ejecutar sin interrupciones, métricas al final.
-RR: cola circular, quantum configurable, reinsertar si resta CPU.
-SJF: elegir ráfaga más corta entre disponibles (no expropiativo).
-</pre>
-  </details>
-{% endif %}
+<div class="container py-4">
+  <div class="row justify-content-center">
+    <div class="col-lg-10">
+
+      <!-- Encabezado -->
+      <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-3 gap-2">
+        <div>
+          <h2 class="mb-0">Planificador de CPU</h2>
+          <p class="text-muted mb-0">
+            Simula algoritmos de planificación FCFS, Round Robin y SJF (no expropiativo).
+          </p>
+        </div>
+        <div class="text-md-end">
+          <span class="badge bg-secondary">
+            Práctica de Sistemas Operativos
+          </span>
+        </div>
+      </div>
+
+      <!-- CARD DEL FORMULARIO -->
+      <div class="card shadow-sm mb-4 border-0">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h5 class="card-title mb-0">Configurar simulación</h5>
+            <span class="badge bg-light text-muted border">
+              Paso 1 · Defina los procesos
+            </span>
+          </div>
+          <p class="text-muted small mb-3">
+            Ingrese la definición de procesos, seleccione el algoritmo y (si aplica) el quantum.
+          </p>
+
+          <form method="post" action="{% url 'run_simulation' %}">
+            {% csrf_token %}
+
+            <!-- Procesos JSON -->
+            <div class="mb-3">
+              <label class="form-label d-flex justify-content-between">
+                <span>{{ form.procesos_json.label }}</span>
+                <span class="badge bg-light text-muted border small">Formato: lista JSON</span>
+              </label>
+              {{ form.procesos_json }}
+              <div class="form-text">
+                Ejemplo:
+                <pre class="bg-light rounded p-2 mb-0 mono" style="white-space: pre-wrap; font-size: 0.8rem;">
+[
+  {"pid": 1, "llegada": 0, "rafaga": 5, "usuario": "usuario1"},
+  {"pid": 2, "llegada": 2, "rafaga": 3, "usuario": "usuario2"}
+]
+                </pre>
+              </div>
+              {% if form.procesos_json.errors %}
+                <div class="invalid-feedback d-block">
+                  {{ form.procesos_json.errors.as_text }}
+                </div>
+              {% endif %}
+            </div>
+
+            <div class="row">
+              <!-- Algoritmo -->
+              <div class="mb-3 col-md-6">
+                {{ form.algoritmo.label_tag }}
+                {{ form.algoritmo }}
+                <div class="form-text">
+                  Seleccione el algoritmo de planificación a simular.
+                </div>
+                {% if form.algoritmo.errors %}
+                  <div class="invalid-feedback d-block">
+                    {{ form.algoritmo.errors.as_text }}
+                  </div>
+                {% endif %}
+              </div>
+
+              <!-- Quantum -->
+              <div class="mb-3 col-md-6">
+                {{ form.quantum.label_tag }}
+                {{ form.quantum }}
+                <div class="form-text">
+                  Solo aplica para Round Robin. Use un entero positivo (ej: 2, 4, 8).
+                </div>
+                {% if form.quantum.errors %}
+                  <div class="invalid-feedback d-block">
+                    {{ form.quantum.errors.as_text }}
+                  </div>
+                {% endif %}
+              </div>
+            </div>
+
+            <!-- Botón -->
+            <div class="d-flex justify-content-end mt-2">
+              <button type="submit" class="btn btn-primary">
+                Ejecutar simulación
+              </button>
+            </div>
+          </form>
+
+          {% if error %}
+            <div class="alert alert-danger mt-3 mb-0" role="alert">
+              <strong>Error:</strong> {{ error }}
+            </div>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if result %}
+      <!-- CARD RESULTADOS -->
+      <div class="card shadow-sm mb-4 border-0">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <div>
+              <h5 class="card-title mb-0">Resultados de la simulación</h5>
+              <p class="text-muted small mb-0">
+                Paso 2 · Analice las métricas de desempeño del planificador.
+              </p>
+            </div>
+            <div class="text-end">
+              <span class="badge bg-info-subtle text-info border border-info small">
+                Makespan: {{ result.makespan }} unidades de tiempo
+              </span>
+            </div>
+          </div>
+
+          <!-- TABLA DE MÉTRICAS -->
+          <div class="table-responsive mb-2">
+            <table class="table table-sm table-striped align-middle mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th scope="col">Métrica</th>
+                  <th scope="col">Valor</th>
+                  <th scope="col">Unidad</th>
+                </tr>
+              </thead>
+              <tbody class="small">
+                <tr>
+                  <td>Tiempo medio de espera</td>
+                  <td><strong>{{ result.avg_wait|floatformat:2 }}</strong></td>
+                  <td>ticks</td>
+                </tr>
+                <tr>
+                  <td>Tiempo medio de retorno</td>
+                  <td><strong>{{ result.avg_turnaround|floatformat:2 }}</strong></td>
+                  <td>ticks</td>
+                </tr>
+                <tr>
+                  <td>Tiempo medio de respuesta</td>
+                  <td><strong>{{ result.avg_response|floatformat:2 }}</strong></td>
+                  <td>ticks</td>
+                </tr>
+                <tr>
+                  <td>Cambios de contexto</td>
+                  <td><strong>{{ result.context_switches }}</strong></td>
+                  <td>total</td>
+                </tr>
+                <tr>
+                  <td>Throughput</td>
+                  <td><strong>{{ result.throughput|default_if_none:"0"|floatformat:2 }}</strong></td>
+                  <td>procesos / unidad de tiempo</td>
+                </tr>
+                <tr>
+                  <td>Utilización de CPU</td>
+                  <td>
+                    <strong>
+                    {% if result.cpu_utilization %}
+                      {% widthratio result.cpu_utilization 1 100 %}%
+                    {% else %}
+                      0%
+                    {% endif %}
+                    </strong>
+                  </td>
+                  <td>% de tiempo ocupado</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Explicación de métricas -->
+      <details class="mt-2">
+        <summary class="fw-semibold">¿Qué significan estas métricas?</summary>
+        <div class="mt-2 border rounded bg-light p-3 small">
+          <p class="mb-2">
+            Estas métricas resumen el desempeño del algoritmo de planificación sobre el conjunto de procesos simulados:
+          </p>
+          <ul class="mb-2">
+            <li>
+              <strong>Tiempo medio de espera</strong> (<code>avg_wait</code>): 
+              promedio del tiempo que los procesos pasan en la cola de listos sin usar CPU.
+            </li>
+            <li>
+              <strong>Tiempo medio de retorno</strong> (<code>avg_turnaround</code>): 
+              promedio del tiempo total desde que el proceso llega al sistema hasta que termina 
+              (incluye espera + ejecución + posibles bloqueos).
+            </li>
+            <li>
+              <strong>Tiempo medio de respuesta</strong> (<code>avg_response</code>): 
+              promedio del tiempo que tarda cada proceso en recibir CPU por primera vez 
+              desde su llegada (latencia inicial percibida por el usuario).
+            </li>
+            <li>
+              <strong>Cambios de contexto</strong> (<code>context_switches</code>): 
+              número de veces que el sistema cambia el proceso en ejecución. 
+              Un número alto puede implicar más sobrecarga del sistema operativo.
+            </li>
+            <li>
+              <strong>Throughput</strong>: 
+              cantidad promedio de procesos completados por unidad de tiempo de simulación. 
+              Mide cuán productivo es el planificador.
+            </li>
+            <li>
+              <strong>Utilización de CPU</strong>: 
+              porcentaje de tiempo en el que la CPU estuvo ejecutando algún proceso 
+              (no ociosa). Valores cercanos al 100% indican que casi siempre estuvo ocupada.
+            </li>
+            <li>
+              <strong>Makespan</strong>: 
+              tiempo total simulado desde el inicio hasta que termina el último proceso. 
+              Representa la duración global de la “carga de trabajo”.
+            </li>
+          </ul>
+          <p class="mb-0">
+            Al comparar estas métricas entre FCFS, SJF y Round Robin puedes analizar 
+            cómo cambia el equilibrio entre tiempo de respuesta, justicia y utilización de CPU.
+          </p>
+        </div>
+      </details>
+
+
+          <!-- LAYOUT DETALLE: TIMELINE + TABLA PROCESOS -->
+          <div class="row g-3">
+            <!-- Timeline -->
+            <div class="col-lg-5">
+              <h6 class="mb-2 d-flex justify-content-between align-items-center">
+                <span>Línea de tiempo</span>
+                <span class="badge bg-light text-muted border small">
+                  Vista por tick
+                </span>
+              </h6>
+              <div class="border rounded bg-light p-2" style="max-height: 260px; overflow:auto;">
+                {% if result.timeline %}
+                  <table class="table table-sm table-hover mb-0 align-middle">
+                    <thead class="table-light">
+                      <tr>
+                        <th scope="col">t</th>
+                        <th scope="col">PID</th>
+                        <th scope="col">Evento</th>
+                        <th scope="col">Dur.</th>
+                      </tr>
+                    </thead>
+                    <tbody class="small">
+                      {% for ev in result.timeline %}
+                        <tr>
+                          <td><code>{{ ev.t }}</code></td>
+                          <td>
+                            {% if ev.pid %}
+                              <span class="badge bg-primary-subtle text-primary border border-primary">
+                                P{{ ev.pid }}
+                              </span>
+                            {% else %}
+                              <span class="badge bg-secondary-subtle text-secondary border border-secondary">
+                                CPU ociosa
+                              </span>
+                            {% endif %}
+                          </td>
+                          <td>
+                            {% if ev.evento == 'run' %}
+                              Ejecutando
+                            {% elif ev.evento == 'idle' or ev.evento == 'CPU ociosa' %}
+                              CPU ociosa
+                            {% else %}
+                              {{ ev.evento }}
+                            {% endif %}
+                          </td>
+                          <td>{{ ev.dur }}</td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                {% else %}
+                  <p class="text-muted mb-0 small">No se registraron eventos en la línea de tiempo.</p>
+                {% endif %}
+              </div>
+            </div>
+
+            <!-- Procesos completados -->
+            <div class="col-lg-7">
+              <h6 class="mb-2 d-flex justify-content-between align-items-center">
+                <span>Procesos completados</span>
+                <span class="badge bg-light text-muted border small">
+                  Métricas por proceso
+                </span>
+              </h6>
+              <div class="border rounded bg-light p-2" style="max-height: 260px; overflow:auto;">
+                {% if result.completed %}
+                  <table class="table table-sm table-hover mb-0 align-middle">
+                    <thead class="table-light">
+                      <tr class="small">
+                        <th scope="col">PID</th>
+                        <th scope="col">Llegada</th>
+                        <th scope="col">Ráfaga</th>
+                        <th scope="col">Inicio</th>
+                        <th scope="col">Fin</th>
+                        <th scope="col">Espera</th>
+                        <th scope="col">Retorno</th>
+                        <th scope="col">Respuesta</th>
+                      </tr>
+                    </thead>
+                    <tbody class="small">
+                      {% for p in result.completed %}
+                        <tr>
+                          <td><span class="badge bg-primary-subtle text-primary border border-primary">P{{ p.pid }}</span></td>
+                          <td>{{ p.arrival_time }}</td>
+                          <td>{{ p.burst_time }}</td>
+                          <td>{{ p.start_time|default:"-" }}</td>
+                          <td>{{ p.finish_time|default:"-" }}</td>
+                          <td>{{ p.waiting_time|default:"-" }}</td>
+                          <td>{{ p.turnaround_time|default:"-" }}</td>
+                          <td>{{ p.response_time|default:"-" }}</td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                {% else %}
+                  <p class="text-muted mb-0 small">Ningún proceso alcanzó el estado Terminado.</p>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+
+          <!-- Explicación de tablas de detalle -->
+          <details class="mt-3">
+            <summary class="fw-semibold">¿Cómo leer la línea de tiempo y la tabla de procesos?</summary>
+            <div class="mt-2 border rounded bg-light p-3 small">
+              <p class="mb-2">
+                Estas dos tablas muestran el comportamiento detallado del planificador, tanto en el eje del tiempo
+                como desde la perspectiva de cada proceso.
+              </p>
+
+              <p class="mb-1"><strong>1. Tabla "Línea de tiempo"</strong></p>
+              <p class="mb-2">
+                Representa, tick a tick, qué está ocurriendo en la CPU:
+              </p>
+              <ul class="mb-2">
+                <li>
+                  <strong>t</strong>: instante de tiempo discreto (tick) en el que ocurre el evento.
+                </li>
+                <li>
+                  <strong>PID</strong>: identificador del proceso que ocupa la CPU en ese tick.
+                  Si aparece <em>CPU ociosa</em>, significa que no había procesos listos en ese momento.
+                </li>
+                <li>
+                  <strong>Evento</strong>: indica si la CPU está <em>ejecutando</em> un proceso
+                  o se encuentra <em>ociosa</em>. Otros valores pueden representar eventos adicionales del simulador.
+                </li>
+                <li>
+                  <strong>Dur.</strong>: duración del evento a partir del tiempo <code>t</code>.
+                  En esta simulación suele ser 1 tick por fila, pero se deja explícito para mayor claridad.
+                </li>
+              </ul>
+              <p class="mb-3">
+                Esta tabla es útil para visualizar en qué momentos hay cambios de contexto, zonas de inactividad de la CPU
+                y cómo se intercalan los procesos a lo largo del tiempo.
+              </p>
+
+              <p class="mb-1"><strong>2. Tabla "Procesos completados"</strong></p>
+              <p class="mb-2">
+                Resume la ejecución de cada proceso que alcanzó el estado <em>Terminado</em>:
+              </p>
+              <ul class="mb-2">
+                <li>
+                  <strong>PID</strong>: identificador del proceso simulado.
+                </li>
+                <li>
+                  <strong>Llegada</strong>: tiempo en el que el proceso entra al sistema 
+                  (momento en que queda elegible para recibir CPU).
+                </li>
+                <li>
+                  <strong>Ráfaga</strong>: tiempo total de CPU que el proceso necesita (burst time).
+                </li>
+                <li>
+                  <strong>Inicio</strong>: primer instante en el que el proceso realmente empieza a ejecutarse en CPU.
+                </li>
+                <li>
+                  <strong>Fin</strong>: instante en el que el proceso termina toda su ráfaga de CPU.
+                </li>
+                <li>
+                  <strong>Espera</strong>: tiempo total que el proceso pasó esperando en cola de listos
+                  sin estar ejecutándose.
+                </li>
+                <li>
+                  <strong>Retorno</strong>: tiempo total desde la llegada hasta la finalización
+                  (incluye espera + ejecución + posibles bloqueos).
+                </li>
+                <li>
+                  <strong>Respuesta</strong>: tiempo que el proceso tuvo que esperar desde su llegada
+                  hasta que obtuvo CPU por primera vez.
+                </li>
+              </ul>
+
+              <p class="mb-0">
+                Juntas, estas tablas permiten ver tanto la <em>historia temporal</em> de la CPU como el
+                <em>resumen por proceso</em>, facilitando comparar el impacto de cada algoritmo
+                (FCFS, SJF, Round Robin) sobre los tiempos de espera, respuesta y el orden de ejecución.
+              </p>
+            </div>
+          </details>
+
+
+          <!-- Macroalgoritmos -->
+          <details class="mt-3">
+            <summary class="fw-semibold">Ver explicación de los algoritmos</summary>
+            <div class="mt-2 border rounded bg-light p-3">
+              <p class="mb-1"><strong>FCFS (First-Come, First-Served)</strong></p>
+              <p class="small mb-2">
+                No expropiativo. Los procesos se ejecutan en orden de llegada hasta agotar su ráfaga de CPU.
+              </p>
+
+              <p class="mb-1"><strong>SJF (Shortest Job First)</strong></p>
+              <p class="small mb-2">
+                No expropiativo. Siempre elige el proceso con menor ráfaga restante entre los que están listos.
+              </p>
+
+              <p class="mb-1"><strong>Round Robin (RR)</strong></p>
+              <p class="small mb-0">
+                Expropiativo. Los procesos se rotan con un quantum fijo. Al agotar el quantum, el proceso vuelve a la cola de listos si aún le queda CPU.
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
+      {% endif %}
+
+    </div>
+  </div>
+</div>
 {% endblock %}

@@ -1,235 +1,272 @@
-from .inodes import Archivo, Directorio
-from .users import DEFAULT_USERS
+from __future__ import annotations
+
+from typing import Dict, Any, Optional
+
+from .models import Directory, File, User, FileSystemEntity
+from .permissions import PermissionSet
+from .ops import FileSystemOps
+from .tree_renderer import render_tree
+
 
 class PermError(Exception):
     ...
 
+
 class NotFound(Exception):
     ...
 
+
 class SistemaArchivos:
     """
-    Sistema de archivos virtual con serialización a dict (JSON-safe).
-    Guarda solo estado serializable en sesión y soporta cd .. (normalización).
+    Envoltorio de alto nivel alrededor de FileSystemOps, con:
+    - Usuarios múltiples (root, usuario1, usuario2)
+    - Serialización JSON-safe para usar en sesión de Django.
+    - API compatible con tu vista: ls, cd, mkdir, touch, cat, echo, chmod, su, pwd, tree, rm.
     """
+
     def __init__(self):
         # Usuarios base
-        self.usuarios = DEFAULT_USERS.copy()
+        self.usuarios: Dict[str, User] = {
+            "root": User(username="root", home="/"),
+            "usuario1": User(username="usuario1", home="/home/usuario1"),
+            "usuario2": User(username="usuario2", home="/home/usuario2"),
+        }
 
-        # Árbol base: / y /home/{usuario1,usuario2}
-        self.raiz = Directorio('/', self.usuarios['root'], permisos='rwxr-xr-x')
-        self.cwd = self.raiz
-        self.cwd_path = '/'
-        self.usuario_actual = self.usuarios['root']
+        # Directorio raíz
+        root_perms = PermissionSet.from_string("rwx")
+        self.root = Directory(name="", owner=self.usuarios["root"], permissions=root_perms)
 
-        home = Directorio('home', self.usuarios['root'], permisos='rwxr-xr-x')
-        self.raiz.add(home)
-        for u in ['usuario1', 'usuario2']:
-            d = Directorio(u, self.usuarios[u], permisos='rwxr-x---')
-            home.add(d)
+        # /home y /home/{usuario1,usuario2}
+        home_dir = Directory(name="home", owner=self.usuarios["root"], permissions=root_perms)
+        self.root.add_child(home_dir)
 
-    # -------------------------
-    # Normalización de rutas
-    # -------------------------
-    def _normalize_path(self, ruta: str) -> str:
+        for uname in ("usuario1", "usuario2"):
+            user_dir = Directory(
+                name=uname,
+                owner=self.usuarios[uname],
+                permissions=PermissionSet.from_string("rwx"),
+            )
+            home_dir.add_child(user_dir)
+
+        # Usuario actual y operaciones
+        self.usuario_actual: User = self.usuarios["root"]
+        self.ops = FileSystemOps(root=self.root, user=self.usuario_actual)
+
+    # ------------ API usada por las vistas ------------
+
+    def ls(self, ruta: Optional[str] = None) -> list[str]:
+        try:
+            return self.ops.ls(ruta)
+        except PermissionError as e:
+            raise PermError(str(e))
+        except FileNotFoundError as e:
+            raise NotFound(str(e))
+        except ValueError as e:
+            raise Exception(str(e))
+
+    def cd(self, ruta: str) -> str:
+        try:
+            return self.ops.cd(ruta)
+        except PermissionError as e:
+            raise PermError(str(e))
+        except FileNotFoundError as e:
+            raise NotFound(str(e))
+        except ValueError as e:
+            raise Exception(str(e))
+
+    def mkdir(self, ruta: str) -> str:
+        try:
+            nuevo = self.ops.mkdir(ruta)
+            return f"Directorio {nuevo.path()} creado"
+        except PermissionError as e:
+            raise PermError(str(e))
+        except FileExistsError as e:
+            raise Exception(str(e))
+        except FileNotFoundError as e:
+            raise NotFound(str(e))
+        except ValueError as e:
+            raise Exception(str(e))
+
+    def touch(self, ruta: str) -> str:
+        try:
+            f = self.ops.touch(ruta)
+            return f"Archivo {f.path()} creado/actualizado"
+        except PermissionError as e:
+            raise PermError(str(e))
+        except FileNotFoundError as e:
+            raise NotFound(str(e))
+        except ValueError as e:
+            raise Exception(str(e))
+
+    def cat(self, ruta: str) -> str:
+        try:
+            return self.ops.cat(ruta)
+        except PermissionError as e:
+            raise PermError(str(e))
+        except FileNotFoundError as e:
+            raise NotFound(str(e))
+        except ValueError as e:
+            raise Exception(str(e))
+
+    def echo(self, ruta: str, contenido: str) -> str:
+        try:
+            self.ops.write(ruta, contenido, append=False)
+            return f"{len(contenido)} bytes escritos"
+        except PermissionError as e:
+            raise PermError(str(e))
+        except FileNotFoundError as e:
+            raise NotFound(str(e))
+        except ValueError as e:
+            raise Exception(str(e))
+
+    def rm(self, ruta: str, recursive: bool = False) -> str:
+        try:
+            self.ops.rm(ruta, recursive=recursive)
+            return f"{ruta} eliminado"
+        except PermissionError as e:
+            raise PermError(str(e))
+        except FileNotFoundError as e:
+            raise NotFound(str(e))
+        except ValueError as e:
+            raise Exception(str(e))
+
+    def chmod(self, ruta: str, permisos: str) -> str:
         """
-        Devuelve una ruta absoluta normalizada, resolviendo '.' y '..'
-        respecto al cwd actual si la ruta es relativa.
+        Cambia permisos (solo propietario o root).
+        Se usa solo el bloque rwx del propietario.
         """
-        if not ruta:
-            return self.cwd_path
+        try:
+            nodo = self.ops.resolve(ruta)
+        except FileNotFoundError as e:
+            raise NotFound(str(e))
 
-        # Base: cwd si es relativa; raíz si es absoluta
-        base_parts = [] if ruta.startswith('/') else [p for p in self.cwd_path.split('/') if p]
-        for token in [p for p in ruta.split('/') if p]:
-            if token == '.':
-                continue
-            elif token == '..':
-                if base_parts:
-                    base_parts.pop()
-            else:
-                base_parts.append(token)
-        return '/' + '/'.join(base_parts)
-
-    # -------------------------
-    # Resolución de rutas
-    # -------------------------
-    def _split_path(self, ruta: str):
-        abs_path = self._normalize_path(ruta)
-        parts = [p for p in abs_path.split('/') if p]
-        base = self.raiz
-        return base, parts
-
-    def _resolve(self, ruta: str):
-        base, parts = self._split_path(ruta)
-        cur = base
-        for p in parts:
-            if not isinstance(cur, Directorio):
-                raise NotFound("No es un directorio")
-            nxt = cur.get(p)
-            if not nxt:
-                raise NotFound(f"No existe: {p}")
-            cur = nxt
-        return cur
-
-    # -------------------------
-    # Permisos (muy simplificados)
-    # -------------------------
-    def _check_read(self, nodo):
-        if self.usuario_actual.nombre == 'root':
-            return True
-        # Lectura si es propietario o grupo/otros con 'r'
-        return (
-            'r' in nodo.permisos[3:6] or
-            'r' in nodo.permisos[6:9] or
-            nodo.propietario == self.usuario_actual
-        )
-
-    def _check_write(self, nodo):
-        if self.usuario_actual.nombre == 'root':
-            return True
-        # Escritura si es propietario o grupo con 'w'
-        return (
-            'w' in nodo.permisos[3:6] or
-            nodo.propietario == self.usuario_actual
-        )
-
-    # -------------------------
-    # Operaciones tipo shell
-    # -------------------------
-    def ls(self, ruta: str = None):
-        target = self.cwd if ruta is None else self._resolve(ruta if ruta else self.cwd_path)
-        if not isinstance(target, Directorio):
-            raise NotFound("No es un directorio")
-        if not self._check_read(target):
-            raise PermError("Permiso denegado")
-        return sorted(target.hijos.keys())
-
-    def cd(self, ruta: str):
-        path = self._normalize_path(ruta)
-        target = self._resolve(path)
-        if not isinstance(target, Directorio):
-            raise NotFound("No es un directorio")
-        if not self._check_read(target):
-            raise PermError("Permiso denegado")
-        self.cwd = target
-        self.cwd_path = path
-        return self.cwd_path
-
-    def mkdir(self, nombre: str):
-        if not self._check_write(self.cwd):
-            raise PermError("Permiso denegado")
-        if nombre in self.cwd.hijos:
-            raise Exception("Ya existe")
-        d = Directorio(nombre, self.usuario_actual, permisos='rwxr-x---')
-        self.cwd.add(d)
-        return f"Directorio {nombre} creado"
-
-    def touch(self, nombre: str):
-        if not self._check_write(self.cwd):
-            raise PermError("Permiso denegado")
-        if nombre in self.cwd.hijos:
-            return "Actualizado timestamp (simulado)"
-        f = Archivo(nombre, self.usuario_actual, permisos='rw-r-----')
-        self.cwd.add(f)
-        return f"Archivo {nombre} creado"
-
-    def cat(self, nombre: str):
-        nodo = self.cwd.get(nombre)
-        if not nodo or not isinstance(nodo, Archivo):
-            raise NotFound("Archivo no encontrado")
-        if not self._check_read(nodo):
-            raise PermError("Permiso denegado")
-        return nodo.contenido
-
-    def echo(self, nombre: str, contenido: str):
-        nodo = self.cwd.get(nombre)
-        if not nodo or not isinstance(nodo, Archivo):
-            raise NotFound("Archivo no encontrado")
-        if not self._check_write(nodo):
-            raise PermError("Permiso denegado")
-        nodo.contenido = contenido
-        nodo.tamanio = len(contenido.encode('utf-8'))
-        return f"{len(contenido)} bytes escritos"
-
-    def chmod(self, nombre: str, permisos: str):
-        nodo = self.cwd.get(nombre)
-        if not nodo:
-            raise NotFound("No existe")
-        if self.usuario_actual.nombre != 'root' and nodo.propietario != self.usuario_actual:
+        if self.usuario_actual.username != "root" and nodo.owner != self.usuario_actual:
             raise PermError("Solo propietario o root puede cambiar permisos")
-        if len(permisos) != 9:
-            raise Exception("Formato: 'rwxrwxrwx'")
-        nodo.permisos = permisos
-        return f"Permisos de {nombre} -> {permisos}"
 
-    def su(self, usuario: str):
+        # Aceptamos 'rwxrwxrwx' pero solo usamos los primeros 3 caracteres.
+        spec = permisos[:3] if len(permisos) >= 3 else permisos
+        nodo.permissions = PermissionSet.from_string(spec)
+        return f"Permisos de {ruta} -> {nodo.permissions.to_string()}"
+
+    def su(self, usuario: str) -> str:
         if usuario not in self.usuarios:
             raise NotFound("Usuario no existe")
+
         self.usuario_actual = self.usuarios[usuario]
+        self.ops.user = self.usuario_actual
+
+        # Intentar moverse al home del usuario (si existe)
+        try:
+            self.ops.cd(self.usuario_actual.home)
+        except Exception:
+            pass
+
         return f"Cambiado a {usuario}"
 
-    def pwd(self):
-        return self.cwd_path
+    def pwd(self) -> str:
+        return self.ops.pwd()
 
-    # -------------------------
-    # Serialización JSON-safe
-    # -------------------------
-    def to_dict(self):
-        """Convierte todo el estado del FS a un dict JSON-serializable."""
+    def tree(self, ruta: Optional[str] = None) -> str:
+        """Renderiza el árbol completo o el subárbol a partir de ruta."""
+        try:
+            if ruta:
+                target = self.ops.resolve(ruta)
+                if not isinstance(target, Directory):
+                    raise NotFound(f"'{ruta}' no es un directorio")
+                return render_tree(target)
+            else:
+                return render_tree(self.root)
+        except FileNotFoundError as e:
+            raise NotFound(str(e))
+        except ValueError as e:
+            raise Exception(str(e))
+
+    # ------------ Serialización JSON-safe para sesión ------------
+
+    def to_dict(self) -> Dict[str, Any]:
         return {
-            "cwd_path": self.cwd_path,
-            "usuario": self.usuario_actual.nombre,
-            "arbol": self._serialize_node(self.raiz),
+            "users": {name: {"home": user.home} for name, user in self.usuarios.items()},
+            "current_user": self.usuario_actual.username,
+            "cwd_path": self.ops.pwd(),
+            "tree": self._serialize_node(self.root),
         }
 
-    @staticmethod
-    def from_dict(data):
-        """Reconstruye el FS a partir del dict; cae a estado limpio ante error."""
-        fs = SistemaArchivos()
+    @classmethod
+    def from_dict(cls, data: Optional[Dict[str, Any]]):
+        fs = cls()
         if not data:
             return fs
+
         try:
-            # Restaurar usuario actual
-            nombre_usuario = data.get("usuario", "root")
-            fs.usuario_actual = fs.usuarios.get(nombre_usuario, fs.usuarios["root"])
-            # Restaurar árbol
-            fs.raiz = fs._deserialize_node(data.get("arbol"))
-            # Restaurar cwd
-            fs.cwd_path = data.get("cwd_path", "/")
-            fs.cwd = fs._resolve(fs.cwd_path)
+            # Usuarios
+            users_data = data.get("users", {})
+            if users_data:
+                fs.usuarios = {}
+                for uname, uinfo in users_data.items():
+                    fs.usuarios[uname] = User(
+                        username=uname,
+                        home=uinfo.get("home", "/"),
+                    )
+
+            # Árbol
+            tree_data = data.get("tree")
+            if tree_data:
+                fs.root = fs._deserialize_node(tree_data, fs.usuarios)
+
+            # Usuario actual
+            current = data.get("current_user", "root")
+            fs.usuario_actual = fs.usuarios.get(current, fs.usuarios.get("root"))
+
+            # Reconstruir ops
+            fs.ops = FileSystemOps(root=fs.root, user=fs.usuario_actual)
+
+            # cwd
+            cwd_path = data.get("cwd_path", "/")
+            try:
+                fs.ops.cd(cwd_path)
+            except Exception:
+                pass
         except Exception:
-            fs = SistemaArchivos()
+            # Si algo falla, volvemos a estado limpio
+            fs = cls()
+
         return fs
 
-    def _serialize_node(self, nodo):
-        """Serializa recursivamente Directorio/Archivo."""
-        base = {
-            "tipo": "dir" if hasattr(nodo, "hijos") else "file",
-            "nombre": nodo.nombre,
-            "propietario": nodo.propietario.nombre,
-            "permisos": nodo.permisos,
+    def _serialize_node(self, nodo: FileSystemEntity) -> Dict[str, Any]:
+        base: Dict[str, Any] = {
+            "tipo": "dir" if isinstance(nodo, Directory) else "file",
+            "nombre": nodo.name,
+            "owner": nodo.owner.username,
+            "permisos": nodo.permissions.to_string(),
         }
-        if base["tipo"] == "dir":
-            base["hijos"] = [self._serialize_node(h) for h in nodo.hijos.values()]
+        if isinstance(nodo, Directory):
+            base["hijos"] = [
+                self._serialize_node(child) for child in nodo.children.values()
+            ]
         else:
-            base["contenido"] = nodo.contenido
-            base["tamanio"] = nodo.tamanio
+            base["contenido"] = nodo.content
         return base
 
-    def _deserialize_node(self, data):
-        """Desserializa recursivamente a Directorio/Archivo."""
-        if not data:
-            return self.raiz
-        owner = self.usuarios.get(data["propietario"], self.usuarios["root"])
-        if data["tipo"] == "dir":
-            d = Directorio(data["nombre"], owner, permisos=data["permisos"])
-            for hijo in data.get("hijos", []):
-                n = self._deserialize_node(hijo)
-                d.add(n)
+    def _deserialize_node(self, data: Dict[str, Any], users: Dict[str, User]) -> FileSystemEntity:
+        owner_name = data.get("owner", "root")
+        owner = users.get(owner_name, users.get("root"))
+        permisos = PermissionSet.from_string(data.get("permisos", ""))
+
+        if data.get("tipo") == "dir":
+            d = Directory(
+                name=data.get("nombre", ""),
+                owner=owner,
+                permissions=permisos,
+            )
+            for hijo_data in data.get("hijos", []):
+                child = self._deserialize_node(hijo_data, users)
+                d.add_child(child)
             return d
         else:
-            f = Archivo(data["nombre"], owner, permisos=data["permisos"])
-            f.contenido = data.get("contenido", "")
-            f.tamanio = data.get("tamanio", 0)
+            f = File(
+                name=data.get("nombre", ""),
+                owner=owner,
+                permissions=permisos,
+                content=data.get("contenido", ""),
+            )
             return f
